@@ -22,7 +22,8 @@ module cve2_id_stage #(
   parameter bit               RV32E           = 0,
   parameter cve2_pkg::rv32m_e RV32M           = cve2_pkg::RV32MFast,
   parameter cve2_pkg::rv32b_e RV32B           = cve2_pkg::RV32BNone,
-  parameter bit               XInterface      = 1'b0
+  parameter bit               XInterface      = 1'b0,
+  parameter bit               RV32F           = 1'b1
 ) (
   input  logic                      clk_i,
   input  logic                      rst_ni,
@@ -146,6 +147,8 @@ module cve2_id_stage #(
 
   // Write back signal
   input  logic [31:0]               result_ex_i,
+  input  logic [31:0]               fp_result_i,
+  input  logic                      fp_done_i,
   input  logic [31:0]               csr_rdata_i,
 
   // Register file read
@@ -155,6 +158,7 @@ module cve2_id_stage #(
   input  logic [31:0]               rf_rdata_b_i,
   output logic [4:0]                rf_raddr_c_o,
   input  logic [31:0]               rf_rdata_c_i,
+  input  logic [31:0]               fp_rdata_b_i,
   output logic                      rf_ren_a_o,
   output logic                      rf_ren_b_o,
   output logic                      rf_ren_c_o,
@@ -163,6 +167,9 @@ module cve2_id_stage #(
   output logic [4:0]                rf_waddr_id_o,
   output logic [31:0]               rf_wdata_id_o,
   output logic                      rf_we_id_o,
+  output logic                      fp_instr_o,
+  output logic                      fp_load_o,
+  output logic                      fp_store_o,
 
   output  logic                     en_wb_o,
   output  logic                     instr_perf_count_id_o,
@@ -225,6 +232,7 @@ module cve2_id_stage #(
   logic                rf_we_dec, rf_we_raw;
   logic                rf_ren_a, rf_ren_b, rf_ren_c;
   logic                rf_ren_a_dec, rf_ren_b_dec, rf_ren_c_dec;
+  logic                fp_instr_dec, fp_load_dec, fp_store_dec;
 
   // Read enables should only be asserted for valid and legal instructions
   assign rf_ren_a = instr_valid_i & ~instr_fetch_err_i & ~illegal_insn_o & rf_ren_a_dec;
@@ -347,7 +355,9 @@ module cve2_id_stage #(
       end
     end
 
-    assign multicycle_done = lsu_req_dec ? lsu_resp_valid_i : (illegal_insn_dec ? coproc_done : ex_valid_i);
+    assign multicycle_done = lsu_req_dec ? lsu_resp_valid_i :
+                             fp_instr_dec ? fp_done_i :
+                             (illegal_insn_dec ? coproc_done : ex_valid_i);
 
     // Issue Interface
     assign x_issue_valid_o      = instr_executing & illegal_insn_dec & (id_fsm_q == FIRST_CYCLE) & scoreboard_free;
@@ -384,7 +394,8 @@ module cve2_id_stage #(
     assign unused_coproc_done = coproc_done;
     assign unused_rf_rdata_c_fwd = rf_rdata_c_fwd;
 
-    assign multicycle_done = lsu_req_dec ? lsu_resp_valid_i : ex_valid_i;
+    assign multicycle_done = lsu_req_dec ? lsu_resp_valid_i :
+                             fp_instr_dec ? fp_done_i : ex_valid_i;
     assign scoreboard_busy = 1'b0;
 
     // Issue Interface
@@ -485,11 +496,14 @@ module cve2_id_stage #(
 
   // Suppress register write if there is an illegal CSR access or instruction is not executing
   assign rf_we_id_o = rf_we_raw & instr_executing & ~illegal_csr_insn_i;
+  assign fp_instr_o = fp_instr_dec & instr_executing;
+  assign fp_load_o  = fp_load_dec & instr_executing;
+  assign fp_store_o = fp_store_dec & instr_executing;
 
   // Register file write data mux
   always_comb begin : rf_wdata_id_mux
     unique case ($bits(rf_wd_sel_e)'({rf_wdata_sel}))
-      RF_WD_EX:     rf_wdata_id_o   = result_ex_i;
+      RF_WD_EX:     rf_wdata_id_o   = fp_instr_dec ? fp_result_i : result_ex_i;
       RF_WD_CSR:    rf_wdata_id_o   = csr_rdata_i;
       RF_WD_COPROC: rf_wdata_id_o   = XInterface? x_result_i.data : result_ex_i;
       default:      rf_wdata_id_o   = result_ex_i;
@@ -504,6 +518,7 @@ module cve2_id_stage #(
     .RV32E          (RV32E),
     .RV32M          (RV32M),
     .RV32B          (RV32B),
+    .RV32F          (RV32F),
     .XInterface     (XInterface)
   ) decoder_i (
     .clk_i (clk_i),
@@ -546,6 +561,9 @@ module cve2_id_stage #(
     .rf_ren_a_o  (rf_ren_a_dec),
     .rf_ren_b_o  (rf_ren_b_dec),
     .rf_ren_c_o  (rf_ren_c_dec),
+    .fp_instr_o  (fp_instr_dec),
+    .fp_load_o   (fp_load_dec),
+    .fp_store_o  (fp_store_dec),
 
     // ALU
     .alu_operator_o    (alu_operator),
@@ -707,7 +725,7 @@ module cve2_id_stage #(
   assign lsu_we_o                = lsu_we;
   assign lsu_type_o              = lsu_type;
   assign lsu_sign_ext_o          = lsu_sign_ext;
-  assign lsu_wdata_o             = rf_rdata_b_fwd;
+  assign lsu_wdata_o             = fp_store_dec ? fp_rdata_b_i : rf_rdata_b_fwd;
   // csr_op_en_o is set when CSR access should actually happen.
   // csv_access_o is set when CSR access instruction is present and is used to compute whether a CSR
   // access is illegal. A combinational loop would be created if csr_op_en_o was used along (as
@@ -798,6 +816,14 @@ module cve2_id_stage #(
                 id_fsm_d    = MULTI_CYCLE;
               end
             end
+            fp_instr_dec: begin
+              rf_we_raw = rf_we_dec & fp_done_i;
+              if (!fp_done_i) begin
+                id_fsm_d      = MULTI_CYCLE;
+                rf_we_raw     = 1'b0;
+                stall_multdiv = 1'b1;
+              end
+            end
             multdiv_en_dec: begin
               // MUL or DIV operation
               if (~ex_valid_i) begin
@@ -863,6 +889,10 @@ module cve2_id_stage #(
         end
 
         MULTI_CYCLE: begin
+          if (fp_instr_dec) begin
+            rf_we_raw = rf_we_dec & fp_done_i;
+            if (!fp_done_i) stall_multdiv = 1'b1;
+          end
           if(multdiv_en_dec) begin
             rf_we_raw       = rf_we_dec & ex_valid_i;
           end
@@ -873,7 +903,7 @@ module cve2_id_stage #(
           if (multicycle_done) begin
             id_fsm_d        = FIRST_CYCLE;
           end else begin
-            stall_multdiv   = multdiv_en_dec;
+            stall_multdiv   = fp_instr_dec ? ~fp_done_i : multdiv_en_dec;
             stall_branch    = branch_in_dec;
             stall_jump      = jump_in_dec;
             stall_coproc    = XInterface & illegal_insn_dec;
@@ -951,7 +981,9 @@ module cve2_id_stage #(
   assign en_wb_o = instr_done;
 
   assign perf_wfi_wait_o = wfi_insn_dec;
-  assign perf_div_wait_o = stall_multdiv & div_en_dec;
+  assign perf_div_wait_o = stall_multdiv &
+                           (div_en_dec | (fp_instr_dec &&
+                            (instr_rdata_i[31:25] inside {7'h0c, 7'h2c})));
 
   //////////
   // FCOV //

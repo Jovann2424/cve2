@@ -57,6 +57,12 @@ module cve2_compressed_decoder (
                        2'b00, 2'b01, instr_i[9:7], 3'b010, 2'b01, instr_i[4:2], {OPCODE_LOAD}};
           end
 
+          3'b011: begin
+            // c.flw -> flw fd', imm(rs1') (RV32F)
+            instr_o = {5'b0, instr_i[5], instr_i[12:10], instr_i[6],
+                       2'b00, 2'b01, instr_i[9:7], 3'b010, 2'b01, instr_i[4:2], 7'h07};
+          end
+
           3'b110: begin
             // c.sw -> sw rs2', imm(rs1')
             instr_o = {5'b0, instr_i[5], instr_i[12], 2'b01, instr_i[4:2],
@@ -64,11 +70,16 @@ module cve2_compressed_decoder (
                        2'b00, {OPCODE_STORE}};
           end
 
-          3'b001,
-          3'b011,
-          3'b100,
-          3'b101,
           3'b111: begin
+            // c.fsw -> fsw fs2', imm(rs1') (RV32F)
+            instr_o = {5'b0, instr_i[5], instr_i[12], 2'b01, instr_i[4:2],
+                       2'b01, instr_i[9:7], 3'b010, instr_i[11:10], instr_i[6],
+                       2'b00, 7'h27};
+          end
+
+          3'b001,
+          3'b100,
+          3'b101: begin
             illegal_instr_o = 1'b1;
           end
 
@@ -221,6 +232,12 @@ module cve2_compressed_decoder (
             if (instr_i[11:7] == 5'b0)  illegal_instr_o = 1'b1;
           end
 
+          3'b011: begin
+            // c.flwsp -> flw fd, imm(x2) (RV32F)
+            instr_o = {4'b0, instr_i[3:2], instr_i[12], instr_i[6:4], 2'b00, 5'h02,
+                       3'b010, instr_i[11:7], 7'h07};
+          end
+
           3'b100: begin
             if (instr_i[12] == 1'b0) begin
               if (instr_i[6:2] != 5'b0) begin
@@ -255,10 +272,14 @@ module cve2_compressed_decoder (
                        instr_i[11:9], 2'b00, {OPCODE_STORE}};
           end
 
-          3'b001,
-          3'b011,
-          3'b101,
           3'b111: begin
+            // c.fswsp -> fsw fs2, imm(x2) (RV32F)
+            instr_o = {4'b0, instr_i[8:7], instr_i[12], instr_i[6:2], 5'h02, 3'b010,
+                       instr_i[11:9], 2'b00, 7'h27};
+          end
+
+          3'b001,
+          3'b101: begin
             illegal_instr_o = 1'b1;
           end
 

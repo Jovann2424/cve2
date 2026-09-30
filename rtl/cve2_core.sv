@@ -24,7 +24,8 @@ module cve2_core import cve2_pkg::*; #(
   parameter rv32b_e      RV32B             = RV32BNone,
   parameter bit          DbgTriggerEn      = 1'b0,
   parameter int unsigned DbgHwBreakNum     = 1,
-  parameter bit          XInterface        = 1'b0
+  parameter bit          XInterface        = 1'b0,
+  parameter bit          RV32F             = 1'b1
 ) (
   // Clock and Reset
   input  logic                         clk_i,
@@ -193,6 +194,16 @@ module cve2_core import cve2_pkg::*; #(
   logic [4:0]  rf_waddr_id;
   logic [31:0] rf_wdata_id;
   logic        rf_we_id;
+
+  logic [31:0] fp_rdata_a, fp_rdata_b, fp_rdata_c;
+  logic [4:0]  fp_rd;
+  logic [31:0] fp_result;
+  logic [4:0]  fp_flags;
+  logic [2:0]  csr_frm;
+  logic        fp_done, fp_busy, fp_writes_fpr, fp_writes_xpr;
+  logic        fp_instr_id, fp_load_id, fp_store_id, fp_rf_we;
+  logic [2:0]  unused_fp_status;
+  assign unused_fp_status = {fp_busy, fp_writes_xpr, fp_store_id};
 
   // ALU Control
   alu_op_e     alu_operator_ex;
@@ -380,6 +391,7 @@ module cve2_core import cve2_pkg::*; #(
     .RV32E          (RV32E),
     .RV32M          (RV32M),
     .RV32B          (RV32B),
+    .RV32F          (RV32F),
     .XInterface     (XInterface)
   ) id_stage_i (
     .clk_i (clk_i),
@@ -503,6 +515,8 @@ module cve2_core import cve2_pkg::*; #(
 
     // write data to commit in the register file
     .result_ex_i(result_ex),
+    .fp_result_i(fp_result),
+    .fp_done_i(fp_done),
     .csr_rdata_i(csr_rdata),
 
     .rf_raddr_a_o      (rf_raddr_a),
@@ -511,12 +525,16 @@ module cve2_core import cve2_pkg::*; #(
     .rf_rdata_b_i      (rf_rdata_b),
     .rf_raddr_c_o      (rf_raddr_c),
     .rf_rdata_c_i      (rf_rdata_c),
+    .fp_rdata_b_i      (fp_rdata_b),
     .rf_ren_a_o        (rf_ren_a),
     .rf_ren_b_o        (rf_ren_b),
     .rf_ren_c_o        (rf_ren_c),
     .rf_waddr_id_o     (rf_waddr_id),
     .rf_wdata_id_o     (rf_wdata_id),
     .rf_we_id_o        (rf_we_id),
+    .fp_instr_o        (fp_instr_id),
+    .fp_load_o         (fp_load_id),
+    .fp_store_o        (fp_store_id),
 
     .en_wb_o           (en_wb),
     .instr_perf_count_id_o (instr_perf_count_id),
@@ -570,6 +588,25 @@ module cve2_core import cve2_pkg::*; #(
     .branch_decision_o(branch_decision),  // to ID
 
     .ex_valid_o(ex_valid)
+  );
+
+  cve2_fpu fpu_i (
+    .clk_i        (clk_i),
+    .rst_ni       (rst_ni),
+    .start_i      (fp_instr_id & instr_first_cycle_id),
+    .instr_i      (instr_rdata_id),
+    .f_rs1_i      (fp_rdata_a),
+    .f_rs2_i      (fp_rdata_b),
+    .f_rs3_i      (fp_rdata_c),
+    .x_rs1_i      (rf_rdata_a),
+    .frm_i        (csr_frm),
+    .done_o       (fp_done),
+    .busy_o       (fp_busy),
+    .writes_fpr_o (fp_writes_fpr),
+    .writes_xpr_o (fp_writes_xpr),
+    .rd_o         (fp_rd),
+    .result_o     (fp_result),
+    .flags_o      (fp_flags)
   );
 
   /////////////////////
@@ -641,7 +678,7 @@ module cve2_core import cve2_pkg::*; #(
     .rf_we_id_i   (rf_we_id),
 
     .rf_wdata_lsu_i(rf_wdata_lsu),
-    .rf_we_lsu_i   (rf_we_lsu),
+    .rf_we_lsu_i   (rf_we_lsu & ~fp_load_id),
 
     .rf_waddr_wb_o(rf_waddr_wb),
     .rf_wdata_wb_o(rf_wdata_wb),
@@ -716,6 +753,22 @@ module cve2_core import cve2_pkg::*; #(
     .we_a_i   (rf_we_wb)
   );
 
+  assign fp_rf_we = (fp_instr_id & fp_done & fp_writes_fpr) |
+                    (fp_load_id & rf_we_lsu);
+  cve2_fpr_file_ff f_register_file_i (
+    .clk_i     (clk_i),
+    .rst_ni    (rst_ni),
+    .raddr_a_i (instr_rdata_id[19:15]),
+    .rdata_a_o (fp_rdata_a),
+    .raddr_b_i (instr_rdata_id[24:20]),
+    .rdata_b_o (fp_rdata_b),
+    .raddr_c_i (instr_rdata_id[31:27]),
+    .rdata_c_o (fp_rdata_c),
+    .waddr_i   ((fp_load_id & rf_we_lsu) ? instr_rdata_id[11:7] : fp_rd),
+    .wdata_i   ((fp_load_id & rf_we_lsu) ? rf_wdata_lsu : fp_result),
+    .we_i      (fp_rf_we)
+  );
+
 
   /////////////////////////////////////////
   // CSRs (Control and Status Registers) //
@@ -734,7 +787,8 @@ module cve2_core import cve2_pkg::*; #(
     .PMPNumRegions    (PMPNumRegions),
     .RV32E            (RV32E),
     .RV32M            (RV32M),
-    .RV32B            (RV32B)
+    .RV32B            (RV32B),
+    .RV32F            (RV32F)
   ) cs_registers_i (
     .clk_i (clk_i),
     .rst_ni(rst_ni),
@@ -743,6 +797,9 @@ module cve2_core import cve2_pkg::*; #(
     .hart_id_i      (hart_id_i),
     .priv_mode_id_o (priv_mode_id),
     .priv_mode_lsu_o(priv_mode_lsu),
+    .csr_frm_o      (csr_frm),
+    .fp_flags_we_i  (fp_instr_id & fp_done),
+    .fp_flags_i     (fp_flags),
 
     // mtvec
     .csr_mtvec_o     (csr_mtvec),

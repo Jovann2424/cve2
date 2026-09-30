@@ -18,7 +18,8 @@ module cve2_decoder #(
   parameter bit RV32E               = 0,
   parameter cve2_pkg::rv32m_e RV32M = cve2_pkg::RV32MFast,
   parameter cve2_pkg::rv32b_e RV32B = cve2_pkg::RV32BNone,
-  parameter bit               XInterface    = 1'b0
+  parameter bit               XInterface    = 1'b0,
+  parameter bit               RV32F         = 1'b1
 ) (
   input  logic                 clk_i,
   input  logic                 rst_ni,
@@ -61,6 +62,9 @@ module cve2_decoder #(
   output logic                     rf_ren_a_o,          // Instruction reads from RF addr A
   output logic                     rf_ren_b_o,          // Instruction reads from RF addr B
   output logic                     rf_ren_c_o,          // Instruction reads from RF addr C (if X-IF if used)
+  output logic                     fp_instr_o,
+  output logic                     fp_load_o,
+  output logic                     fp_store_o,
 
   // ALU
   output cve2_pkg::alu_op_e        alu_operator_o,        // ALU operation selection
@@ -105,6 +109,15 @@ module cve2_decoder #(
   logic        illegal_reg_rv32e;
   logic        csr_illegal;
   logic        rf_we;
+  logic        fp_instr, fp_load, fp_store;
+
+  localparam logic [6:0] OPCODE_LOAD_FP  = 7'h07;
+  localparam logic [6:0] OPCODE_STORE_FP = 7'h27;
+  localparam logic [6:0] OPCODE_MADD     = 7'h43;
+  localparam logic [6:0] OPCODE_MSUB     = 7'h47;
+  localparam logic [6:0] OPCODE_NMSUB    = 7'h4b;
+  localparam logic [6:0] OPCODE_NMADD    = 7'h4f;
+  localparam logic [6:0] OPCODE_OP_FP    = 7'h53;
 
   logic [31:0] instr;
   logic [31:0] instr_alu;
@@ -182,6 +195,9 @@ module cve2_decoder #(
   if (RV32E) begin : gen_rv32e_reg_check_active
     assign illegal_reg_rv32e = ((rf_raddr_a_o[4] & (alu_op_a_mux_sel_o == OP_A_REG_A)) |
                                 (rf_raddr_b_o[4] & (alu_op_b_mux_sel_o == OP_B_REG_B)) |
+                                ((instr[6:0] == OPCODE_OP_FP &&
+                                  instr[31:25] inside {7'h68, 7'h78}) & instr[19]) |
+                                ((instr[6:0] inside {OPCODE_LOAD_FP, OPCODE_STORE_FP}) & instr[19]) |
                                 (rf_waddr_o[4]   & rf_we));
   end else begin : gen_rv32e_reg_check_inactive
     assign illegal_reg_rv32e = 1'b0;
@@ -227,6 +243,9 @@ module cve2_decoder #(
     data_type_o           = 2'b00;
     data_sign_extension_o = 1'b0;
     data_req_o            = 1'b0;
+    fp_instr              = 1'b0;
+    fp_load               = 1'b0;
+    fp_store              = 1'b0;
 
     illegal_insn          = 1'b0;
     ebrk_insn_o           = 1'b0;
@@ -640,7 +659,73 @@ module cve2_decoder #(
 
       end
       default: begin
-        illegal_insn = 1'b1;
+        unique case (instr[6:0])
+          OPCODE_LOAD_FP: begin
+            illegal_insn = !RV32F || (instr[14:12] != 3'b010);
+            if (!illegal_insn) begin
+              fp_load = 1'b1;
+              data_req_o = 1'b1;
+              data_type_o = 2'b00;
+              rf_ren_a_o = 1'b1;
+            end
+          end
+          OPCODE_STORE_FP: begin
+            illegal_insn = !RV32F || (instr[14:12] != 3'b010);
+            if (!illegal_insn) begin
+              fp_store = 1'b1;
+              data_req_o = 1'b1;
+              data_we_o = 1'b1;
+              data_type_o = 2'b00;
+              rf_ren_a_o = 1'b1;
+            end
+          end
+          OPCODE_MADD, OPCODE_MSUB, OPCODE_NMSUB, OPCODE_NMADD: begin
+            illegal_insn = !RV32F || (instr[26:25] != 2'b00) ||
+                           (instr[14:12] > 3'b100 && instr[14:12] != 3'b111);
+            fp_instr = !illegal_insn;
+          end
+          OPCODE_OP_FP: begin
+            fp_instr = RV32F;
+            unique case (instr[31:25])
+              7'h00, 7'h04, 7'h08, 7'h0c: begin
+                illegal_insn = !RV32F ||
+                               (instr[14:12] > 3'b100 && instr[14:12] != 3'b111);
+              end
+              7'h2c: begin
+                illegal_insn = !RV32F || (instr[24:20] != 0) ||
+                               (instr[14:12] > 3'b100 && instr[14:12] != 3'b111);
+              end
+              7'h10: illegal_insn = !RV32F || (instr[14:12] > 3'b010);
+              7'h14: illegal_insn = !RV32F || (instr[14:12] > 3'b001);
+              7'h50: begin
+                illegal_insn = !RV32F || !(instr[14:12] inside {3'b000,3'b001,3'b010});
+                rf_we = !illegal_insn;
+              end
+              7'h60: begin
+                illegal_insn = !RV32F || (instr[24:20] > 1) ||
+                               (instr[14:12] > 3'b100 && instr[14:12] != 3'b111);
+                rf_we = !illegal_insn;
+              end
+              7'h68: begin
+                illegal_insn = !RV32F || (instr[24:20] > 1) ||
+                               (instr[14:12] > 3'b100 && instr[14:12] != 3'b111);
+                rf_ren_a_o = !illegal_insn;
+              end
+              7'h70: begin
+                illegal_insn = !RV32F || (instr[24:20] != 0) ||
+                               !(instr[14:12] inside {3'b000,3'b001});
+                rf_we = !illegal_insn;
+              end
+              7'h78: begin
+                illegal_insn = !RV32F || (instr[24:20] != 0) || (instr[14:12] != 0);
+                rf_ren_a_o = !illegal_insn;
+              end
+              default: illegal_insn = 1'b1;
+            endcase
+            fp_instr = RV32F && !illegal_insn;
+          end
+          default: illegal_insn = 1'b1;
+        endcase
       end
     endcase
 
@@ -671,6 +756,10 @@ module cve2_decoder #(
       end 
     end
   end
+
+  assign fp_instr_o = fp_instr & ~illegal_insn_o;
+  assign fp_load_o  = fp_load & ~illegal_insn_o;
+  assign fp_store_o = fp_store & ~illegal_insn_o;
 
   /////////////////////////////
   // Decoder for ALU control //
@@ -1164,7 +1253,19 @@ module cve2_decoder #(
         end
 
       end
-      default: ;
+      default: begin
+        if (instr_alu[6:0] == OPCODE_LOAD_FP) begin
+          alu_op_a_mux_sel_o = OP_A_REG_A;
+          alu_op_b_mux_sel_o = OP_B_IMM;
+          imm_b_mux_sel_o    = IMM_B_I;
+          alu_operator_o     = ALU_ADD;
+        end else if (instr_alu[6:0] == OPCODE_STORE_FP) begin
+          alu_op_a_mux_sel_o = OP_A_REG_A;
+          alu_op_b_mux_sel_o = OP_B_IMM;
+          imm_b_mux_sel_o    = IMM_B_S;
+          alu_operator_o     = ALU_ADD;
+        end
+      end
     endcase
   end
 

@@ -46,6 +46,13 @@ package cve2_pkg;
     RV32BFull       = 3
   } rv32b_e;
 
+  typedef enum logic [4:0] {
+    FP_ADD, FP_SUB, FP_MUL, FP_DIV, FP_SQRT, FP_FMA, FP_FMS, FP_FNMS, FP_FNMAS,
+    FP_SGNJ, FP_SGNJN, FP_SGNJX, FP_MIN, FP_MAX,
+    FP_CVT_W, FP_CVT_WU, FP_CVT_S_W, FP_CVT_S_WU,
+    FP_EQ, FP_LT, FP_LE, FP_CLASS, FP_MOVE_X_W, FP_MOVE_W_X
+  } fp_op_e;
+
   /////////////
   // Opcodes //
   /////////////
@@ -364,6 +371,11 @@ package cve2_pkg;
 
   // CSRs
   typedef enum logic[11:0] {
+    // Floating-point state and control
+    CSR_FFLAGS    = 12'h001,
+    CSR_FRM       = 12'h002,
+    CSR_FCSR      = 12'h003,
+
     // Machine information
     CSR_MVENDORID  = 12'hF11,
     CSR_MARCHID    = 12'hF12,

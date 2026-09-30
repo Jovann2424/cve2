@@ -8,6 +8,9 @@ description: "CVE2 CPU Core Components"
 
 filesets:
   files_rtl:
+    include_dirs:
+      - rtl/third_party/HardFloat-1/source
+      - rtl/third_party/HardFloat-1/source/RISCV
     depend:
       - lowrisc:prim:assert
       - openhwgroup:cve2:cve2_pkg
@@ -21,6 +24,21 @@ filesets:
       - rtl/cve2_csr.sv
       - rtl/cve2_counter.sv
       - rtl/cve2_decoder.sv
+      - rtl/third_party/HardFloat-1/source/HardFloat_primitives.v
+      - rtl/third_party/HardFloat-1/source/HardFloat_rawFN.v
+      - rtl/third_party/HardFloat-1/source/RISCV/HardFloat_specialize.v
+      - rtl/third_party/HardFloat-1/source/isSigNaNRecFN.v
+      - rtl/third_party/HardFloat-1/source/fNToRecFN.v
+      - rtl/third_party/HardFloat-1/source/recFNToFN.v
+      - rtl/third_party/HardFloat-1/source/recFNToIN.v
+      - rtl/third_party/HardFloat-1/source/iNToRecFN.v
+      - rtl/third_party/HardFloat-1/source/addRecFN.v
+      - rtl/third_party/HardFloat-1/source/mulRecFN.v
+      - rtl/third_party/HardFloat-1/source/mulAddRecFN.v
+      - rtl/third_party/HardFloat-1/source/compareRecFN.v
+      - rtl/third_party/HardFloat-1/source/divSqrtRecFN_small.v
+      - rtl/third_party/HardFloat-1/source/recFNToRecFN.v
+      - rtl/cve2_fpu.sv
       - rtl/cve2_ex_block.sv
       - rtl/cve2_fetch_fifo.sv
       - rtl/cve2_id_stage.sv
