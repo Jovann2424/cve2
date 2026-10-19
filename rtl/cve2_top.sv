@@ -19,7 +19,8 @@ module cve2_top import cve2_pkg::*; #(
   parameter int unsigned MHPMCounterWidth = 40,
   parameter bit          RV32E            = 1'b0,
   parameter rv32m_e      RV32M            = RV32MFast,
-  parameter bit          XInterface       = 1'b0
+  parameter bit          XInterface       = 1'b0,
+  parameter bit          RV32F            = 1'b1
 ) (
   // Clock and Reset
   input  logic                         clk_i,
@@ -180,6 +181,7 @@ module cve2_top import cve2_pkg::*; #(
     .MHPMCounterWidth (MHPMCounterWidth),
     .RV32E            (RV32E),
     .RV32M            (RV32M),
+    .RV32F            (RV32F),
     .RV32B            (RV32B),
     .DbgTriggerEn     (DbgTriggerEn),
     .DbgHwBreakNum    (DbgHwBreakNum),

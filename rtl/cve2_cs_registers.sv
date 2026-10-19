@@ -23,7 +23,8 @@ module cve2_cs_registers #(
   parameter int unsigned      PMPNumRegions     = 4,
   parameter bit               RV32E             = 0,
   parameter cve2_pkg::rv32m_e RV32M             = cve2_pkg::RV32MFast,
-  parameter cve2_pkg::rv32b_e RV32B             = cve2_pkg::RV32BNone
+  parameter cve2_pkg::rv32b_e RV32B             = cve2_pkg::RV32BNone,
+  parameter bit              RV32F             = 1'b1
 ) (
 
   // Clock and Reset
@@ -37,6 +38,9 @@ module cve2_cs_registers #(
   output cve2_pkg::priv_lvl_e  priv_mode_id_o,
   output cve2_pkg::priv_lvl_e  priv_mode_lsu_o,
   output logic                 csr_mstatus_tw_o,
+  output logic [2:0]           csr_frm_o,
+  input  logic                 fp_flags_we_i,
+  input  logic [4:0]           fp_flags_i,
 
   // mtvec
   output logic [31:0]          csr_mtvec_o,
@@ -110,6 +114,10 @@ import cve2_pkg::*;
   localparam int unsigned RV32BEnabled = (RV32B == RV32BNone) ? 0 : 1;
   localparam int unsigned RV32MEnabled = (RV32M == RV32MNone) ? 0 : 1;
   localparam int unsigned PMPAddrWidth = (PMPGranularity > 0) ? 33 - PMPGranularity : 32;
+  localparam int unsigned UmodeEnabled = 0;
+
+  logic umode_control;
+  assign umode_control = logic'(UmodeEnabled);
 
   // misa
   localparam logic [31:0] MISA_VALUE =
@@ -118,12 +126,12 @@ import cve2_pkg::*;
     | (1                 <<  2)  // C - Compressed extension
     | (0                 <<  3)  // D - Double precision floating-point extension
     | (32'(RV32E)        <<  4)  // E - RV32E base ISA
-    | (0                 <<  5)  // F - Single precision floating-point extension
+    | (32'(RV32F)        <<  5)  // F - Single precision floating-point extension
     | (32'(!RV32E)       <<  8)  // I - RV32I/64I/128I base ISA
     | (RV32MEnabled      << 12)  // M - Integer Multiply/Divide extension
     | (0                 << 13)  // N - User level interrupts supported
     | (0                 << 18)  // S - Supervisor mode implemented
-    | (1                 << 20)  // U - User mode implemented
+    | (UmodeEnabled      << 20)  // U - User mode implemented
     | (0                 << 23)  // X - Non-standard extensions present
     | (32'(CSR_MISA_MXL) << 30); // M-XLEN
 
@@ -165,6 +173,8 @@ import cve2_pkg::*;
   priv_lvl_e   priv_lvl_q, priv_lvl_d;
   status_t     mstatus_q, mstatus_d;
   logic        mstatus_en;
+  logic [4:0]  fflags_q;
+  logic [2:0]  frm_q;
   irqs_t       mie_q, mie_d;
   logic        mie_en;
   logic [31:0] mscratch_q;
@@ -285,10 +295,24 @@ import cve2_pkg::*;
         csr_rdata_int[CSR_MSTATUS_MPP_BIT_HIGH:CSR_MSTATUS_MPP_BIT_LOW] = mstatus_q.mpp;
         csr_rdata_int[CSR_MSTATUS_MPRV_BIT]                             = mstatus_q.mprv;
         csr_rdata_int[CSR_MSTATUS_TW_BIT]                               = mstatus_q.tw;
+        csr_rdata_int[14:13]                                             = RV32F ? 2'b11 : 2'b00;
       end
 
       // mstatush: All zeros for CVE2 (fixed little endian and all other bits reserved)
       CSR_MSTATUSH: csr_rdata_int = '0;
+
+      CSR_FFLAGS: begin
+        csr_rdata_int = {27'b0, fflags_q};
+        illegal_csr = !RV32F;
+      end
+      CSR_FRM: begin
+        csr_rdata_int = {29'b0, frm_q};
+        illegal_csr = !RV32F;
+      end
+      CSR_FCSR: begin
+        csr_rdata_int = {24'b0, frm_q, fflags_q};
+        illegal_csr = !RV32F;
+      end
 
       // menvcfg: machine environment configuration, all zeros for CVE2 (none of the relevant
       // features are implemented)
@@ -528,13 +552,19 @@ import cve2_pkg::*;
               mie:  csr_wdata_int[CSR_MSTATUS_MIE_BIT],
               mpie: csr_wdata_int[CSR_MSTATUS_MPIE_BIT],
               mpp:  priv_lvl_e'(csr_wdata_int[CSR_MSTATUS_MPP_BIT_HIGH:CSR_MSTATUS_MPP_BIT_LOW]),
-              mprv: csr_wdata_int[CSR_MSTATUS_MPRV_BIT],
-              tw:   csr_wdata_int[CSR_MSTATUS_TW_BIT]
+              mprv: csr_wdata_int[CSR_MSTATUS_MPRV_BIT] & umode_control,
+              tw:   csr_wdata_int[CSR_MSTATUS_TW_BIT] & umode_control
           };
-          // Convert illegal values to M-mode
-          if ((mstatus_d.mpp != PRIV_LVL_M) && (mstatus_d.mpp != PRIV_LVL_U)) begin
+          // Convert illegal values to M-mode.  When U-mode is disabled
+          // (umode_control==0) any non-M value (including U) is forced to M.
+          if ((mstatus_d.mpp != PRIV_LVL_M) &&
+              !(umode_control && (mstatus_d.mpp == PRIV_LVL_U))) begin
             mstatus_d.mpp = PRIV_LVL_M;
           end
+        end
+
+        CSR_FFLAGS, CSR_FRM, CSR_FCSR: begin
+          // Floating-point CSRs are updated in the dedicated bank below.
         end
 
         // interrupt enable
@@ -557,8 +587,10 @@ import cve2_pkg::*;
         CSR_DCSR: begin
           dcsr_d = csr_wdata_int;
           dcsr_d.xdebugver = XDEBUGVER_STD;
-          // Change to PRIV_LVL_M if software writes an unsupported value
-          if ((dcsr_d.prv != PRIV_LVL_M) && (dcsr_d.prv != PRIV_LVL_U)) begin
+          // Change to PRIV_LVL_M if software writes an unsupported value.
+          // When U-mode is disabled, U is also unsupported -> force M.
+          if ((dcsr_d.prv != PRIV_LVL_M) &&
+              !(umode_control && (dcsr_d.prv == PRIV_LVL_U))) begin
             dcsr_d.prv = PRIV_LVL_M;
           end
 
@@ -693,7 +725,8 @@ import cve2_pkg::*;
           // otherwise just set mstatus.MPIE/MPP
           // See RISC-V Privileged Specification, version 1.11, Section 3.1.6.1
           mstatus_d.mpie = 1'b1;
-          mstatus_d.mpp  = PRIV_LVL_U;
+          // Least-privileged supported mode: U if implemented, else M.
+          mstatus_d.mpp  = umode_control ? PRIV_LVL_U : PRIV_LVL_M;
         end
       end // csr_restore_mret_i
 
@@ -732,6 +765,28 @@ import cve2_pkg::*;
   assign csr_we_int  = csr_wr & csr_op_en_i & ~illegal_csr_insn_o;
 
   assign csr_rdata_o = csr_rdata_int;
+
+  assign csr_frm_o = frm_q;
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      fflags_q <= '0;
+      frm_q    <= 3'b000;
+    end else begin
+      if (csr_we_int && RV32F) begin
+        unique case (csr_addr_i)
+          CSR_FFLAGS: fflags_q <= csr_wdata_int[4:0];
+          CSR_FRM:    frm_q    <= (csr_wdata_int[2:0] <= 3'd4) ? csr_wdata_int[2:0] : 3'd0;
+          CSR_FCSR: begin
+            fflags_q <= csr_wdata_int[4:0];
+            frm_q    <= (csr_wdata_int[7:5] <= 3'd4) ? csr_wdata_int[7:5] : 3'd0;
+          end
+          default:;
+        endcase
+      end
+      if (fp_flags_we_i && RV32F) fflags_q <= fflags_q | fp_flags_i;
+    end
+  end
 
   // directly output some registers
   assign csr_mepc_o  = mepc_q;
@@ -921,7 +976,7 @@ import cve2_pkg::*;
   );
 
   // MSTACK
-  localparam status_stk_t MSTACK_RESET_VAL = '{mpie: 1'b1, mpp: PRIV_LVL_U};
+  localparam status_stk_t MSTACK_RESET_VAL = '{mpie: 1'b1, mpp: UmodeEnabled ? PRIV_LVL_U : PRIV_LVL_M};
   cve2_csr #(
     .Width     ($bits(status_stk_t)),
     .ShadowCopy(1'b0),
@@ -1420,7 +1475,7 @@ import cve2_pkg::*;
                                    1'b1,                    // m       : match in m-mode
                                    1'b0,                    // 0       : zero
                                    1'b0,                    // s       : not supported
-                                   1'b1,                    // u       : match in u-mode
+                                   umode_control,           // u       : match in u-mode
                                    selected_tmatch_control, // execute : match instruction address
                                    1'b0,                    // store   : not supported
                                    1'b0};                   // load    : not supported
@@ -1476,6 +1531,7 @@ import cve2_pkg::*;
     assign  mstatus_extended_read[CSR_MSTATUS_MPP_BIT_HIGH:CSR_MSTATUS_MPP_BIT_LOW] = mstatus_q.mpp;
     assign  mstatus_extended_read[CSR_MSTATUS_MPRV_BIT]                             = mstatus_q.mprv;
     assign  mstatus_extended_read[CSR_MSTATUS_TW_BIT]                               = mstatus_q.tw;
+    assign  mstatus_extended_read[14:13]                                            = RV32F ? 2'b11 : 2'b00;
 
     assign mie_extended_read[CSR_MSIX_BIT]                       = mie_q.irq_software;
     assign mie_extended_read[CSR_MTIX_BIT]                       = mie_q.irq_timer;
@@ -1501,6 +1557,7 @@ import cve2_pkg::*;
     assign  mstatus_extended_write[CSR_MSTATUS_MPP_BIT_HIGH:CSR_MSTATUS_MPP_BIT_LOW] = mstatus_d.mpp;
     assign  mstatus_extended_write[CSR_MSTATUS_MPRV_BIT]                             = mstatus_d.mprv;
     assign  mstatus_extended_write[CSR_MSTATUS_TW_BIT]                               = mstatus_d.tw;
+    assign  mstatus_extended_write[14:13]                                            = RV32F ? 2'b11 : 2'b00;
 
     assign mcause_extended_write = {32'b0, mcause_d[6], 25'b0, mcause_d[5:0]};
 

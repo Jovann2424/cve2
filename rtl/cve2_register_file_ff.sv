@@ -80,3 +80,32 @@ module cve2_register_file_ff #(
   assign unused_test_en = test_en_i;
 
 endmodule
+
+// Single-precision floating-point register bank (f0-f31).
+module cve2_fpr_file_ff (
+  input  logic        clk_i,
+  input  logic        rst_ni,
+  input  logic [4:0]  raddr_a_i,
+  output logic [31:0] rdata_a_o,
+  input  logic [4:0]  raddr_b_i,
+  output logic [31:0] rdata_b_o,
+  input  logic [4:0]  raddr_c_i,
+  output logic [31:0] rdata_c_o,
+  input  logic [4:0]  waddr_i,
+  input  logic [31:0] wdata_i,
+  input  logic        we_i
+);
+  logic [31:0] fpr_q [32];
+
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      for (int i = 0; i < 32; i++) fpr_q[i] <= '0;
+    end else if (we_i) begin
+      fpr_q[waddr_i] <= wdata_i;
+    end
+  end
+
+  assign rdata_a_o = fpr_q[raddr_a_i];
+  assign rdata_b_o = fpr_q[raddr_b_i];
+  assign rdata_c_o = fpr_q[raddr_c_i];
+endmodule

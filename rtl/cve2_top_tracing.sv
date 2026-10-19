@@ -11,7 +11,8 @@ module cve2_top_tracing import cve2_pkg::*; #(
   parameter int unsigned MHPMCounterNum   = 10,
   parameter int unsigned MHPMCounterWidth = 40,
   parameter bit          RV32E            = 1'b0,
-  parameter rv32m_e      RV32M            = RV32MFast
+  parameter rv32m_e      RV32M            = RV32MFast,
+  parameter bit          RV32F            = 1'b1
 ) (
   // Clock and Reset
   input  logic                         clk_i,
@@ -84,7 +85,7 @@ module cve2_top_tracing import cve2_pkg::*; #(
 
   // cve2_tracer relies on the signals from the RISC-V Formal Interface
   `ifndef RVFI
-    $fatal("Fatal error: RVFI needs to be defined globally.");
+    $fatal(1, "Fatal error: RVFI needs to be defined globally.");
   `endif
 
   logic        rvfi_valid;
@@ -131,7 +132,8 @@ module cve2_top_tracing import cve2_pkg::*; #(
     .MHPMCounterNum   ( MHPMCounterNum   ),
     .MHPMCounterWidth ( MHPMCounterWidth ),
     .RV32E            ( RV32E            ),
-    .RV32M            ( RV32M            )
+    .RV32M            ( RV32M            ),
+    .RV32F            ( RV32F            )
   ) u_cve2_top (
     .clk_i,
     .rst_ni,
