@@ -30,6 +30,7 @@ module cve2_fpu (
   localparam logic [6:0] OP_NMSUB    = 7'h4b;
   localparam logic [6:0] OP_NMADD    = 7'h4f;
   localparam logic [6:0] OP_FP       = 7'h53;
+  localparam logic [6:0] OP_CUSTOM0  = 7'h0b;
   localparam logic [7:0] FADD_S      = 8'h00;
   localparam logic [7:0] FSUB_S      = 8'h04;
   localparam logic [7:0] FMUL_S      = 8'h08;
@@ -58,13 +59,21 @@ module cve2_fpu (
   logic [32:0] add_result, mul_result, fma_result, itof_result;
   logic [4:0] add_exception, mul_exception, fma_exception;
   logic div_instruction, fp_instruction, fp_to_x;
+  logic fadd3_instruction, fadd3_phase2_q;
+  logic [32:0] add_a, add_b, fadd3_partial_q;
+  logic [4:0] fadd3_flags_q;
   logic [4:0] class_result;
   logic [31:0] fmv_class_result;
   logic unused_div_in_ready;
 
   assign rm = (instr_i[14:12] == 3'b111) ? frm_i : instr_i[14:12];
+  assign fadd3_instruction = (instr_i[6:0] == OP_CUSTOM0) &&
+                             (instr_i[26:25] == 2'b00);
   assign fp_instruction = (instr_i[6:0] == OP_FP) ||
-                          (instr_i[6:0] inside {OP_MADD, OP_MSUB, OP_NMSUB, OP_NMADD});
+                          (instr_i[6:0] inside {OP_MADD, OP_MSUB, OP_NMSUB, OP_NMADD}) ||
+                          fadd3_instruction;
+  assign add_a = fadd3_phase2_q ? fadd3_partial_q : rec_a;
+  assign add_b = fadd3_phase2_q ? rec_c : rec_b;
   assign div_instruction = (instr_i[6:0] == OP_FP) &&
                            ((instr_i[31:25] == FDIV_S[6:0]) ||
                             (instr_i[31:25] == FSQRT_S[6:0]));
@@ -79,7 +88,8 @@ module cve2_fpu (
   fNToRecFN #(.expWidth(8), .sigWidth(24)) f_to_rec_c (.in(f_rs3_i), .out(rec_c));
 
   addRecFN #(.expWidth(8), .sigWidth(24)) add_sub_unit (
-    .control(`flControl_default), .subOp(instr_i[30]), .a(rec_a), .b(rec_b),
+    .control(`flControl_default),
+    .subOp(fadd3_instruction ? 1'b0 : instr_i[30]), .a(add_a), .b(add_b),
     .roundingMode(rm), .out(add_result), .exceptionFlags(add_exception)
   );
   mulRecFN #(.expWidth(8), .sigWidth(24)) mul_unit (
@@ -120,6 +130,24 @@ module cve2_fpu (
   assign unused_div_in_ready = div_in_ready;
 
   always_comb begin
+    rec_result = add_result;
+    if (fadd3_instruction) begin
+      rec_result = add_result;
+    end else if (instr_i[6:0] inside {OP_MADD, OP_MSUB, OP_NMSUB, OP_NMADD}) begin
+      rec_result = fma_result;
+    end else begin
+      unique case (instr_i[31:25])
+        FADD_S[6:0], FSUB_S[6:0]: rec_result = add_result;
+        FMUL_S[6:0]: rec_result = mul_result;
+        FDIV_S[6:0], FSQRT_S[6:0]: rec_result = div_result;
+        FCVT_S_W[6:0]: rec_result = itof_result;
+        default: rec_result = add_result;
+      endcase
+    end
+  end
+
+
+  always_comb begin
     class_result = '0;
     if (f_rs1_i[30:23] == 8'hff) begin
       if (f_rs1_i[22:0] != 0) class_result[f_rs1_i[22] ? 9 : 8] = 1'b1;
@@ -141,7 +169,7 @@ module cve2_fpu (
       default: fmv_class_result = f_rs1_i;
     endcase
 
-    rec_result = add_result;
+
     flags_o = '0;
     result_o = ieee_result;
     writes_fpr_o = fp_instruction;
@@ -149,14 +177,14 @@ module cve2_fpu (
     rd_o = instr_i[11:7];
 
     if (instr_i[6:0] inside {OP_MADD, OP_MSUB, OP_NMSUB, OP_NMADD}) begin
-      rec_result = fma_result;
+
       flags_o = fma_exception;
     end else begin
       unique case (instr_i[31:25])
-        FADD_S[6:0], FSUB_S[6:0]: begin rec_result = add_result; flags_o = add_exception; end
-        FMUL_S[6:0]: begin rec_result = mul_result; flags_o = mul_exception; end
+        FADD_S[6:0], FSUB_S[6:0]: flags_o = add_exception;
+        FMUL_S[6:0]: flags_o = mul_exception;
         FDIV_S[6:0], FSQRT_S[6:0]: begin
-          rec_result = div_result;
+
           flags_o = div_result_flags;
         end
         FSGNJ_S[6:0]: begin
@@ -185,7 +213,7 @@ module cve2_fpu (
           result_o = cvt_result;
           flags_o = {int_flags[2] | int_flags[1], 3'b0, int_flags[0]};
         end
-        FCVT_S_W[6:0]: begin rec_result = itof_result; flags_o = itof_flags; end
+        FCVT_S_W[6:0]: flags_o = itof_flags;
         FCMP_S[6:0]: begin
           unique case (instr_i[14:12])
             3'b010: result_o = {31'b0, cmp_eq};
@@ -215,9 +243,33 @@ module cve2_fpu (
       writes_xpr_o = 1'b1;
     if (instr_i[31:25] == FMV_W_X[6:0]) flags_o = '0;
     if (instr_i[31:25] == FMV_FCLASS[6:0] || instr_i[31:25] == FSGNJ_S[6:0]) flags_o = '0;
+    if (fadd3_instruction) begin
+      result_o = ieee_result;
+      flags_o = fadd3_phase2_q ? (fadd3_flags_q | add_exception) : 5'b0;
+      writes_fpr_o = 1'b1;
+      writes_xpr_o = 1'b0;
+    end
   end
 
-  assign done_o = div_instruction ? div_out_valid : start_i;
-  assign busy_o = div_instruction && !div_out_valid;
+  always_ff @(posedge clk_i or negedge rst_ni) begin
+    if (!rst_ni) begin
+      fadd3_phase2_q <= 1'b0;
+      fadd3_partial_q <= '0;
+      fadd3_flags_q <= '0;
+    end else if (start_i && fadd3_instruction && !fadd3_phase2_q) begin
+      // First rounded addition: (fa + fb). Reuse its recoded result next cycle.
+      fadd3_partial_q <= add_result;
+      fadd3_flags_q <= add_exception;
+      fadd3_phase2_q <= 1'b1;
+    end else if (fadd3_phase2_q) begin
+      fadd3_phase2_q <= 1'b0;
+    end
+  end
+
+
+  assign done_o = fadd3_instruction ? fadd3_phase2_q :
+                  (div_instruction ? div_out_valid : start_i);
+  assign busy_o = fadd3_instruction ? !fadd3_phase2_q :
+                  (div_instruction && !div_out_valid);
 
 endmodule

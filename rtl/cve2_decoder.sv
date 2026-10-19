@@ -118,6 +118,7 @@ module cve2_decoder #(
   localparam logic [6:0] OPCODE_NMSUB    = 7'h4b;
   localparam logic [6:0] OPCODE_NMADD    = 7'h4f;
   localparam logic [6:0] OPCODE_OP_FP    = 7'h53;
+  localparam logic [6:0] OPCODE_CUSTOM0  = 7'h0b;
 
   logic [31:0] instr;
   logic [31:0] instr_alu;
@@ -680,6 +681,12 @@ module cve2_decoder #(
             end
           end
           OPCODE_MADD, OPCODE_MSUB, OPCODE_NMSUB, OPCODE_NMADD: begin
+            illegal_insn = !RV32F || (instr[26:25] != 2'b00) ||
+                           (instr[14:12] > 3'b100 && instr[14:12] != 3'b111);
+            fp_instr = !illegal_insn;
+          end
+          OPCODE_CUSTOM0: begin
+            // Custom R4-format FADD3.S: (fa + fb) + fc, with two rounded steps.
             illegal_insn = !RV32F || (instr[26:25] != 2'b00) ||
                            (instr[14:12] > 3'b100 && instr[14:12] != 3'b111);
             fp_instr = !illegal_insn;

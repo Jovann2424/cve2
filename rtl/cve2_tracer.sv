@@ -417,6 +417,163 @@ module cve2_tracer (
   function automatic void decode_mnemonic(input string mnemonic);
     decoded_str = mnemonic;
   endfunction
+  function automatic string fp_rm_to_str(input logic [2:0] rm);
+    unique case (rm)
+      3'b000: return "rne";
+      3'b001: return "rtz";
+      3'b010: return "rdn";
+      3'b011: return "rup";
+      3'b100: return "rmm";
+      default: return "dyn";
+    endcase
+  endfunction
+
+  function automatic void decode_fp_insn();
+    logic [6:0] opcode;
+    logic [6:0] funct7;
+    logic [2:0] funct3;
+    logic [4:0] rd, rs1, rs2, rs3;
+    logic signed [31:0] imm;
+    string mnemonic;
+
+    opcode = rvfi_insn[6:0];
+    funct7 = rvfi_insn[31:25];
+    funct3 = rvfi_insn[14:12];
+    rd = rvfi_insn[11:7];
+    rs1 = rvfi_insn[19:15];
+    rs2 = rvfi_insn[24:20];
+    rs3 = rvfi_insn[31:27];
+    data_accessed = '0;
+    mnemonic = "";
+
+    if (opcode == 7'h0b) begin
+      if (rvfi_insn[26:25] == 2'b00) begin
+        decoded_str = $sformatf("fadd3.s\tf%0d,f%0d,f%0d,f%0d,%s",
+                                rd, rs1, rs2, rs3, fp_rm_to_str(funct3));
+      end else begin
+        decode_mnemonic("INVALID");
+      end
+    end else if (opcode inside {7'h43, 7'h47, 7'h4b, 7'h4f}) begin
+      unique case (opcode)
+        7'h43: mnemonic = "fmadd.s";
+        7'h47: mnemonic = "fmsub.s";
+        7'h4b: mnemonic = "fnmsub.s";
+        default: mnemonic = "fnmadd.s";
+      endcase
+      decoded_str = $sformatf("%s\tf%0d,f%0d,f%0d,f%0d,%s",
+                              mnemonic, rd, rs1, rs2, rs3, fp_rm_to_str(funct3));
+    end else if (opcode == 7'h07) begin
+      imm = $signed({{20{rvfi_insn[31]}}, rvfi_insn[31:20]});
+      if (funct3 == 3'b010) begin
+        decoded_str = $sformatf("flw\tf%0d,%0d(x%0d)", rd, imm, rs1);
+        data_accessed = RS1 | MEM;
+      end else begin
+        decode_mnemonic("INVALID");
+      end
+    end else if (opcode == 7'h27) begin
+      imm = $signed({{20{rvfi_insn[31]}}, rvfi_insn[31:25], rvfi_insn[11:7]});
+      if (funct3 == 3'b010) begin
+        decoded_str = $sformatf("fsw\tf%0d,%0d(x%0d)", rs2, imm, rs1);
+        data_accessed = RS1 | MEM;
+      end else begin
+        decode_mnemonic("INVALID");
+      end
+    end else begin
+      unique case (funct7)
+        7'h00: mnemonic = "fadd.s";
+        7'h04: mnemonic = "fsub.s";
+        7'h08: mnemonic = "fmul.s";
+        7'h0c: mnemonic = "fdiv.s";
+        7'h2c: mnemonic = "fsqrt.s";
+        default: mnemonic = "";
+      endcase
+
+      if (mnemonic != "") begin
+        if (funct7 == 7'h2c && rs2 == 0) begin
+          decoded_str = $sformatf("%s\tf%0d,f%0d,%s",
+                                  mnemonic, rd, rs1, fp_rm_to_str(funct3));
+        end else if (funct7 != 7'h2c) begin
+          decoded_str = $sformatf("%s\tf%0d,f%0d,f%0d,%s",
+                                  mnemonic, rd, rs1, rs2, fp_rm_to_str(funct3));
+        end else begin
+          decode_mnemonic("INVALID");
+        end
+      end else begin
+        unique case (funct7)
+          7'h10: begin
+            unique case (funct3)
+              3'b000: mnemonic = "fsgnj.s";
+              3'b001: mnemonic = "fsgnjn.s";
+              3'b010: mnemonic = "fsgnjx.s";
+              default: mnemonic = "";
+            endcase
+            if (mnemonic != "")
+              decoded_str = $sformatf("%s\tf%0d,f%0d,f%0d", mnemonic, rd, rs1, rs2);
+            else decode_mnemonic("INVALID");
+          end
+          7'h14: begin
+            unique case (funct3)
+              3'b000: mnemonic = "fmin.s";
+              3'b001: mnemonic = "fmax.s";
+              default: mnemonic = "";
+            endcase
+            if (mnemonic != "")
+              decoded_str = $sformatf("%s\tf%0d,f%0d,f%0d", mnemonic, rd, rs1, rs2);
+            else decode_mnemonic("INVALID");
+          end
+          7'h50: begin
+            unique case (funct3)
+              3'b000: mnemonic = "fle.s";
+              3'b001: mnemonic = "flt.s";
+              3'b010: mnemonic = "feq.s";
+              default: mnemonic = "";
+            endcase
+            if (mnemonic != "") begin
+              decoded_str = $sformatf("%s\tx%0d,f%0d,f%0d", mnemonic, rd, rs1, rs2);
+              data_accessed = RD;
+            end else decode_mnemonic("INVALID");
+          end
+          7'h60: begin
+            if (rs2 == 0) mnemonic = "fcvt.w.s";
+            else if (rs2 == 1) mnemonic = "fcvt.wu.s";
+            else mnemonic = "";
+            if (mnemonic != "") begin
+              decoded_str = $sformatf("%s\tx%0d,f%0d,%s",
+                                      mnemonic, rd, rs1, fp_rm_to_str(funct3));
+              data_accessed = RD;
+            end else decode_mnemonic("INVALID");
+          end
+          7'h68: begin
+            if (rs2 == 0) mnemonic = "fcvt.s.w";
+            else if (rs2 == 1) mnemonic = "fcvt.s.wu";
+            else mnemonic = "";
+            if (mnemonic != "") begin
+              decoded_str = $sformatf("%s\tf%0d,x%0d,%s",
+                                      mnemonic, rd, rs1, fp_rm_to_str(funct3));
+              data_accessed = RS1;
+            end else decode_mnemonic("INVALID");
+          end
+          7'h70: begin
+            if (rs2 == 0 && funct3 == 3'b000) begin
+              decoded_str = $sformatf("fmv.x.w\tx%0d,f%0d", rd, rs1);
+              data_accessed = RD;
+            end else if (rs2 == 0 && funct3 == 3'b001) begin
+              decoded_str = $sformatf("fclass.s\tx%0d,f%0d", rd, rs1);
+              data_accessed = RD;
+            end else decode_mnemonic("INVALID");
+          end
+          7'h78: begin
+            if (rs2 == 0 && funct3 == 3'b000) begin
+              decoded_str = $sformatf("fmv.w.x\tf%0d,x%0d", rd, rs1);
+              data_accessed = RS1;
+            end else decode_mnemonic("INVALID");
+          end
+          default: decode_mnemonic("INVALID");
+        endcase
+      end
+    end
+  endfunction
+
 
   function automatic void decode_r_insn(input string mnemonic);
     data_accessed = RS1 | RS2 | RD;
@@ -832,6 +989,9 @@ module cve2_tracer (
       end
     end else begin
       unique casez (rvfi_insn)
+        // RV32F and fused multiply-add instructions
+        {25'h?, 7'h53}, {25'h?, 7'h43}, {25'h?, 7'h47}, {25'h?, 7'h4b}, {25'h?, 7'h4f},
+        {25'h?, 7'h07}, {25'h?, 7'h27}, {25'h?, 7'h0b}: decode_fp_insn();
         // Regular opcodes
         INSN_LUI:        decode_u_insn("lui");
         INSN_AUIPC:      decode_u_insn("auipc");
