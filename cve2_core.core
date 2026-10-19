@@ -8,6 +8,9 @@ description: "CVE2 CPU Core Components"
 
 filesets:
   files_rtl:
+    include_dirs:
+      - rtl/third_party/HardFloat-1/source
+      - rtl/third_party/HardFloat-1/source/RISCV
     depend:
       - lowrisc:prim:assert
       - openhwgroup:cve2:cve2_pkg
