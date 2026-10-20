@@ -59,9 +59,9 @@ module cve2_fpu (
   logic [32:0] add_result, mul_result, fma_result, itof_result;
   logic [4:0] add_exception, mul_exception, fma_exception;
   logic div_instruction, fp_instruction, fp_to_x;
-  logic fadd3_instruction, fadd3_phase2_q;
-  logic [32:0] add_a, add_b, fadd3_partial_q;
-  logic [4:0] fadd3_flags_q;
+  logic fadd3_instruction;
+  logic [32:0] fadd3_result;
+  logic [4:0] fadd3_exception;
   logic [4:0] class_result;
   logic [31:0] fmv_class_result;
   logic unused_div_in_ready;
@@ -72,8 +72,6 @@ module cve2_fpu (
   assign fp_instruction = (instr_i[6:0] == OP_FP) ||
                           (instr_i[6:0] inside {OP_MADD, OP_MSUB, OP_NMSUB, OP_NMADD}) ||
                           fadd3_instruction;
-  assign add_a = fadd3_phase2_q ? fadd3_partial_q : rec_a;
-  assign add_b = fadd3_phase2_q ? rec_c : rec_b;
   assign div_instruction = (instr_i[6:0] == OP_FP) &&
                            ((instr_i[31:25] == FDIV_S[6:0]) ||
                             (instr_i[31:25] == FSQRT_S[6:0]));
@@ -89,8 +87,14 @@ module cve2_fpu (
 
   addRecFN #(.expWidth(8), .sigWidth(24)) add_sub_unit (
     .control(`flControl_default),
-    .subOp(fadd3_instruction ? 1'b0 : instr_i[30]), .a(add_a), .b(add_b),
+    .subOp(fadd3_instruction ? 1'b0 : instr_i[30]), .a(rec_a), .b(rec_b),
     .roundingMode(rm), .out(add_result), .exceptionFlags(add_exception)
+  );
+  // FADD3 cascades a second rounded HardFloat addition in the same cycle.
+  addRecFN #(.expWidth(8), .sigWidth(24)) fadd3_second_add_unit (
+    .control(`flControl_default), .subOp(1'b0),
+    .a(add_result), .b(rec_c), .roundingMode(rm),
+    .out(fadd3_result), .exceptionFlags(fadd3_exception)
   );
   mulRecFN #(.expWidth(8), .sigWidth(24)) mul_unit (
     .control(`flControl_default), .a(rec_a), .b(rec_b), .roundingMode(rm),
@@ -132,7 +136,7 @@ module cve2_fpu (
   always_comb begin
     rec_result = add_result;
     if (fadd3_instruction) begin
-      rec_result = add_result;
+      rec_result = fadd3_result;
     end else if (instr_i[6:0] inside {OP_MADD, OP_MSUB, OP_NMSUB, OP_NMADD}) begin
       rec_result = fma_result;
     end else begin
@@ -245,31 +249,14 @@ module cve2_fpu (
     if (instr_i[31:25] == FMV_FCLASS[6:0] || instr_i[31:25] == FSGNJ_S[6:0]) flags_o = '0;
     if (fadd3_instruction) begin
       result_o = ieee_result;
-      flags_o = fadd3_phase2_q ? (fadd3_flags_q | add_exception) : 5'b0;
+      flags_o = add_exception | fadd3_exception;
       writes_fpr_o = 1'b1;
       writes_xpr_o = 1'b0;
     end
   end
 
-  always_ff @(posedge clk_i or negedge rst_ni) begin
-    if (!rst_ni) begin
-      fadd3_phase2_q <= 1'b0;
-      fadd3_partial_q <= '0;
-      fadd3_flags_q <= '0;
-    end else if (start_i && fadd3_instruction && !fadd3_phase2_q) begin
-      // First rounded addition: (fa + fb). Reuse its recoded result next cycle.
-      fadd3_partial_q <= add_result;
-      fadd3_flags_q <= add_exception;
-      fadd3_phase2_q <= 1'b1;
-    end else if (fadd3_phase2_q) begin
-      fadd3_phase2_q <= 1'b0;
-    end
-  end
-
-
-  assign done_o = fadd3_instruction ? fadd3_phase2_q :
-                  (div_instruction ? div_out_valid : start_i);
-  assign busy_o = fadd3_instruction ? !fadd3_phase2_q :
-                  (div_instruction && !div_out_valid);
+  // Only divide and square-root require multiple cycles.
+  assign done_o = div_instruction ? div_out_valid : start_i;
+  assign busy_o = div_instruction && !div_out_valid;
 
 endmodule
