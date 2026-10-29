@@ -1,0 +1,53 @@
+# Experimental LibreLane flow for the CVE2 core with the custom FADD3 RTL.
+# CLOCK_PERIOD is an initial 4 ns timing target for exploration, not a signoff spec.
+DESIGN_NAME: cve2_core
+PDK: ihp-sg13g2
+STD_CELL_LIBRARY: sg13g2_stdcell
+CLOCK_PORT: clk_i
+CLOCK_PERIOD: 4.0
+FP_CORE_UTIL: 35
+VERILOG_DEFINES:
+  - SYNTHESIS
+VERILOG_INCLUDE_DIRS:
+  - dir::../../rtl
+  - dir::../../vendor/lowrisc_ip/ip/prim/rtl
+  - dir::../../vendor/lowrisc_ip/dv/sv/dv_utils
+  - dir::../../rtl/third_party/HardFloat-1/source
+  - dir::../../rtl/third_party/HardFloat-1/source/RISCV
+VERILOG_FILES:
+  - dir::../../rtl/cve2_pkg.sv
+  - dir::../../rtl/cve2_alu.sv
+  - dir::../../rtl/cve2_branch_predict.sv
+  - dir::../../rtl/cve2_compressed_decoder.sv
+  - dir::../../rtl/cve2_controller.sv
+  - dir::../../rtl/cve2_cs_registers.sv
+  - dir::../../rtl/cve2_csr.sv
+  - dir::../../rtl/cve2_counter.sv
+  - dir::../../rtl/cve2_decoder.sv
+  - dir::../../rtl/cve2_ex_block.sv
+  - dir::../../rtl/cve2_fetch_fifo.sv
+  - dir::../../rtl/cve2_fpu.sv
+  - dir::../../rtl/cve2_id_stage.sv
+  - dir::../../rtl/cve2_if_stage.sv
+  - dir::../../rtl/cve2_load_store_unit.sv
+  - dir::../../rtl/cve2_multdiv_fast.sv
+  - dir::../../rtl/cve2_multdiv_slow.sv
+  - dir::../../rtl/cve2_prefetch_buffer.sv
+  - dir::../../rtl/cve2_pmp.sv
+  - dir::../../rtl/cve2_wb.sv
+  - dir::../../rtl/cve2_register_file_ff.sv
+  - dir::../../rtl/cve2_core.sv
+  - dir::../../rtl/third_party/HardFloat-1/source/HardFloat_primitives.v
+  - dir::../../rtl/third_party/HardFloat-1/source/HardFloat_rawFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/RISCV/HardFloat_specialize.v
+  - dir::../../rtl/third_party/HardFloat-1/source/isSigNaNRecFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/fNToRecFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/recFNToFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/recFNToIN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/iNToRecFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/addRecFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/mulRecFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/mulAddRecFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/compareRecFN.v
+  - dir::../../rtl/third_party/HardFloat-1/source/divSqrtRecFN_small.v
+  - dir::../../rtl/third_party/HardFloat-1/source/recFNToRecFN.v
